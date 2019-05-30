@@ -72,7 +72,7 @@ int main()
                 break;
 
             default:
-                printf("Choice must be d, l, or q\n");
+                printf("Choice must be L, D, A, N, or Q\n");
         }
     }
 }
@@ -135,11 +135,11 @@ FILE * connect_to_server()
 void menu()
 {
     printf("\n\n");
-    printf("List files\n");
-    printf("Download a file\n");
-    printf("All files\n");
-    printf("Numbered download\n");
-    printf("Quit\n");
+    printf("(L) List files\n");
+    printf("(D) Download a file\n");
+    printf("(A) All files\n");
+    printf("(N) Numbered download\n");
+    printf("(Q) Quit\n");
     printf("\n");
 }
 
@@ -186,7 +186,17 @@ void list_files(FILE *s)
  */
 void download(FILE *s)
 {
+    // Declare variable
+    char filename[200];
     
+    // Ask the user to enter file name to download
+    printf("Please enter the file name you want to download: ");
+
+    // Get the file name
+    scanf("%s", filename);
+
+    // Download the file
+    download_file(s, filename);
 }
 
 /* 
@@ -197,3 +207,260 @@ void quit(FILE *s)
     fclose(s);
 }
 
+/*
+ * Gets the size of the file
+ */
+int size(FILE *s, char *filename)
+{
+    // Declare buffer
+    char request[200];
+    char buffer[200];
+    char tmp[200];
+    char *ptr;
+
+    // Format request
+    sprintf(request, "SIZE %s\n", filename);
+
+    // Send request to server
+    fprintf(s, "%s", request);
+
+    // Read the first line of respond
+    fgets(buffer, sizeof(buffer), s);
+
+    // Let's see if the file was valid
+    if (strncmp(buffer, "+OK", 3) == 0) {
+        // Copy string right after +OK to find size of file
+        strcpy(tmp, buffer+4);
+
+        // Convert the string to integer
+        int size = strtol(tmp, &ptr, 10);
+        
+        // Return size
+        return size;
+    } else { // File was not valid and didn't exists
+        printf("File did not exists!\n");
+        return -1;
+    }
+}
+
+/*
+ * Download a single file
+ */
+void download_file(FILE *s, char *filename)
+{
+    // Declare variables and buffers
+    char request[300];
+    char buffer[200];
+    int filesize;
+    char buffer_for_reading_file[1025];
+    int left;
+
+    // Let's check if file exists
+    if(file_exists(filename) == 0) {
+        printf("File exists, do you want to override it (y/n)? ");
+        char input[100];
+        scanf("%s", input);
+        if(strcmp(input, "y") != 0 && strcmp(input, "Y") != 0) {
+            exit(0);
+        }
+    }
+
+    // Let's get file size
+    filesize = size(s, filename);
+    left = filesize;
+
+    // Let's check the file size
+    // If it is -1 that means file didn't exist
+    if(filesize == -1) {
+        printf("File did not exists!\n");
+        return;
+    }
+
+    // Send request to server with the file name
+    sprintf(request, "GET %s\n", filename);
+    fprintf(s, "%s", request);
+
+    // Flush the request
+    fflush(s);
+
+    // Read the first line
+    fgets(buffer, sizeof(buffer), s);
+
+    // Let's double check and see if the file was valid
+    if (strcmp(buffer, "+OK\n") == 0) {
+        // Open write file
+        FILE * fWrite = fopen(filename, "wb");
+
+        // Read file
+        while ( left > 0 ) {
+            // Read 1024 bytes of chunks of data until less than 1024 is left
+            // Then we go to else part and read the rest
+            if(left >= 1024) {
+                // Read 1024 bytes
+                fread(buffer_for_reading_file, 1024, 1, s);
+
+                // Write 1024 bytes to file
+                fwrite(buffer_for_reading_file, 1024, 1, fWrite);
+                fflush(fWrite);
+
+                // Decrease 1024 bytes from left
+                left -= 1024;
+
+                // Print progress bar
+                print_progress_bar(left, filesize);
+            } else { // If less than 1024 bytes left
+                // Read "left" size
+                fread(buffer_for_reading_file, left, 1, s);
+
+                // Write the rest to file
+                fwrite(buffer_for_reading_file, left, 1, fWrite);
+                fflush(fWrite);
+
+                // Decrease the last little of bit for no reason!
+                left -= left;
+
+                // Print progress bar
+                print_progress_bar(left, filesize);
+            }
+        }
+        fclose(fWrite);
+    }
+    printf("\n");
+}
+
+/*
+ * This function will download all the files
+ */
+void download_all(FILE *s)
+{
+    // Create a two dimensional array for name of all files
+    char name_of_all_files[100][100];
+
+    // Get the list of files
+    int number_of_files = list_all(s, name_of_all_files);
+
+    for(int i=0; i<number_of_files; i++) {
+        printf("%s\n", name_of_all_files[i]);
+        download_file(s, name_of_all_files[i]);
+    }
+}
+
+/*
+ * This function will get the list of all files
+ * And will return the number of files read
+ */
+int list_all(FILE *s, char filenames[100][100])
+{
+    // Create a buffer to read respond
+    char buffer[200];
+    // Number of items read
+    int counter = 0;
+
+    // Send command LIST to server
+    fprintf(s, "LIST\n");
+
+    // Flush fprintf
+    fflush(s);
+
+    // Read first line
+    fgets(buffer, sizeof(buffer), s);
+
+    // Let's double check and see if the request was valid
+    if (strcmp(buffer, "+OK\n") == 0) {
+        // Read back the received data and print until we find ".\n"
+        while ( fgets(buffer, sizeof(buffer), s) ) {
+            if (strcmp(buffer, ".\n") == 0)
+                break;
+            
+            // Find the first space, that's where file name starts
+            char *ptr = strstr(buffer, " ");
+
+            // Remove the last character which is new line
+            int last_character = strlen(ptr);
+            ptr[last_character-1] = 0;
+
+            // Copy the file name to the list
+            strcpy(filenames[counter], ptr+1);
+
+            // Increment the counter
+            counter ++;
+        }
+    } else { // Something went wrong
+        printf("Something went wrong!\n");
+        printf("Exiting");
+        exit(-1);
+    }
+    return counter;
+}
+
+/*
+ * Print the progress bar
+ */
+void print_progress_bar(int left, int total)
+{
+    // How much percent is downloaded
+    float percent = (float)(total-left)/(float)total;
+
+    // We will print [#####   ] like this
+    // Number of # is passed
+    // and number of spaces is left
+    // Terminal is 80 characters long
+    // [ and ] is used so 78 characters left for progress bar
+    int passed = (int)(percent * 78);
+    int remainder = 78 - passed;
+
+    char output[100] = {0};
+
+    strcat(output, "\r[");
+    for(int i=0; i<passed; i++)
+        strcat(output, "|");
+    for(int i=0; i<remainder; i++)
+        strcat(output, " ");
+    strcat(output, "]");
+    printf("%s", output);
+    fflush(stdout);
+}
+
+/*
+ * Checks whether file exists or not
+ */
+int file_exists(char *filename)
+{
+    if (access(filename, F_OK) == 0) {
+        return 0;
+    } else {
+        return 1;
+    }   
+}
+
+void print_all_files_with_number(FILE *s)
+{
+    // Create a two dimensional array for name of all files
+    char name_of_all_files[100][100];
+
+    // buffer for user input
+    char input[100];
+    char *tmp;
+
+    // Get the list of files
+    int number_of_files = list_all(s, name_of_all_files);
+
+    for(int i=0; i<number_of_files; i++) {
+        printf("%i - %s\n", i+1, name_of_all_files[i]);
+    }
+
+    // Print info
+    printf("Which file you want to download (enter number)? ");
+
+    // Get user input
+    scanf("%s", input);
+
+    // Convert number to integer
+    int number = strtol(input, &tmp, 10);
+
+    // Print a message
+    printf("Downloading %s\n", name_of_all_files[number-1]);
+
+    // Download the file
+    download_file(s, name_of_all_files[number-1]);
+}
